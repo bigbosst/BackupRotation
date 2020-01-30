@@ -1,0 +1,18 @@
+[Globals]
+	backups=Data Home PgSQL
+	days=6
+	weeks=3
+	months=3
+	years=0
+
+[Data]
+	source=/data
+	destination=/mnt/backups/data
+
+[Home]
+	source=/home
+	destination=/mnt/backups/home
+  
+[PgSQL]
+  destination=/mnt/backups/postgres
+  command=su - postgres -s /bin/bash -c \"/usr/bin/pg_dumpall "\$BACKUP_DESTINATION_DIR"/"\$BACKUP_NAME"-"\$DATE".pgdump\"

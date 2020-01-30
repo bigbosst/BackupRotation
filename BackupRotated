@@ -1,0 +1,216 @@
+#!/bin/bash
+
+# currently wont run if backup name is not specified
+#${BACKUP_NAME:="project"}
+
+export BACKUP_NAME=""
+if [[ -z ${BACKUP_DEFAULT_CONF_FILE} ]]; then export BACKUP_DEFAULT_CONF_FILE="/etc/default/BackupRotated.ini"; fi
+if [[ -z ${BACKUP_DEFAULT_RETENTION_DAILY} ]]; then export BACKUP_DEFAULT_RETENTION_DAILY=3; fi
+if [[ -z ${BACKUP_DEFAULT_RETENTION_WEEKLY} ]]; then export BACKUP_DEFAULT_RETENTION_WEEKLY=3; fi
+if [[ -z ${BACKUP_DEFAULT_RETENTION_MONTHLY} ]]; then export BACKUP_DEFAULT_RETENTION_MONTHLY=6; fi
+if [[ -z ${BACKUP_DEFAULT_RETENTION_YEARLY} ]]; then export BACKUP_DEFAULT_RETENTION_YEARLY=0; fi
+if [[ -z ${BACKUP_DEFAULT_SOURCE_DIR} ]]; then export BACKUP_DEFAULT_SOURCE_DIR="/var/www/html"; fi
+if [[ -z ${BACKUP_DEFAULT_DESTINATION_DIR} ]]; then export BACKUP_DEFAULT_DESTINATION_DIR="/mnt/backups"; fi
+if [[ -z ${BACKUP_DEFAULT_COMMAND} ]]; then export BACKUP_DEFAULT_COMMAND="tar czf \"\$BACKUP_DESTINATION_DIR\"/\"\$BACKUP_NAME\"-\"\$DATE\".tar.gz \"\$BACKUP_SOURCE_DIR\""; fi
+
+export DAYYEAR=$(date +%j)
+export DAYMONTH=$(date +%d)
+export DAYWEEK=$(date +%u)
+
+if [[ ( ${DAYYEAR#0} -eq 1 ) ]];
+        then
+        FN='yearly'
+elif [[ ( ${DAYMONTH#0} -eq 1 ) ]];
+        then
+        FN='monthly'
+elif [[ ( ${DAYWEEK#0} -eq 7 ) ]];
+        then
+        FN='weekly'
+elif [[ ( ${DAYWEEK#0} -lt 7 ) ]];
+        then
+        FN='daily'
+fi
+
+export DATE=${FN}-$(date +"%Y%m%d")
+
+function backup
+{
+    echo "Starting Backup of ${BACKUP_NAME}"
+    echo "Running: ${BACKUP_COMMAND}"
+    eval ${BACKUP_COMMAND}
+    mkdir -p ${BACKUP_DESTINATION_DIR}
+    cd ${BACKUP_DESTINATION_DIR}
+    echo "Rotating old backups"
+    ls -t | grep ${BACKUP_NAME} | grep daily | sed -e 1,"${BACKUP_RETENTION_DAILY}"d | xargs -d '\n' rm -R > /dev/null 2>&1
+    ls -t | grep ${BACKUP_NAME} | grep weekly | sed -e 1,"${BACKUP_RETENTION_WEEKLY}"d | xargs -d '\n' rm -R > /dev/null 2>&1
+    ls -t | grep ${BACKUP_NAME} | grep monthly | sed -e 1,"${BACKUP_RETENTION_MONTHLY}"d | xargs -d '\n' rm -R > /dev/null 2>&1
+    if [[ ( ${BACKUP_RETENTION_YEARLY} -gt 0 ) ]]; then
+        ls -t | grep ${BACKUP_NAME} | grep htdocs | grep yearly | sed -e 1,"${BACKUP_RETENTION_YEARLY}"d | xargs -d '\n' rm -R > /dev/null 2>&1
+    fi
+}
+
+function setVariables
+{
+	if [[ -z ${BACKUP_RETENTION_DAILY} ]]; then export BACKUP_RETENTION_DAILY=${BACKUP_DEFAULT_RETENTION_DAILY}; fi
+	if [[ -z ${BACKUP_RETENTION_WEEKLY} ]]; then export BACKUP_RETENTION_WEEKLY=${BACKUP_DEFAULT_RETENTION_WEEKLY}; fi
+	if [[ -z ${BACKUP_RETENTION_MONTHLY} ]]; then export BACKUP_RETENTION_MONTHLY=${BACKUP_DEFAULT_RETENTION_MONTHLY}; fi
+	if [[ -z ${BACKUP_RETENTION_YEARLY} ]]; then export BACKUP_RETENTION_YEARLY=${BACKUP_DEFAULT_RETENTION_YEARLY}; fi
+	if [[ -z ${BACKUP_SOURCE_DIR} ]]; then export BACKUP_SOURCE_DIR=${BACKUP_DEFAULT_SOURCE_DIR}; fi
+	if [[ -z ${BACKUP_DESTINATION_DIR} ]]; then export BACKUP_DESTINATION_DIR=${BACKUP_DEFAULT_DESTINATION_DIR}; fi
+	if [[ -z ${BACKUP_COMMAND} ]]; then export BACKUP_COMMAND=${BACKUP_DEFAULT_COMMAND}; fi
+}
+
+function clearVariables
+{
+	export BACKUP_RETENTION_DAILY=""
+	export BACKUP_RETENTION_WEEKLY=""
+	export BACKUP_RETENTION_MONTHLY=""
+	export BACKUP_RETENTION_YEARLY=""
+	export BACKUP_SOURCE_DIR=""
+	export BACKUP_DESTINATION_DIR=""
+	export BACKUP_COMMAND=""
+	export days=""
+	export weeks=""
+	export months=""
+	export years=""
+	export source=""
+	export destination=""
+	export command=""
+}
+
+function selectBackup
+{
+	setVariables
+
+	echo "Select the Proper Backup"
+	if [[	( ${BACKUP_RETENTION_DAILY} -gt 0 ) &&
+		( ! -z "${BACKUP_RETENTION_DAILY}" ) &&
+		( ${BACKUP_RETENTION_DAILY} -ne 0 ) &&
+		( $FN == daily ) ]]
+	then
+	    echo "Daily Backup Run"
+	    backup
+	fi
+	if [[	( ${BACKUP_RETENTION_WEEKLY} -gt 0 ) &&
+		( ! -z "${BACKUP_RETENTION_WEEKLY}" ) &&
+		( ${BACKUP_RETENTION_WEEKLY} -ne 0 ) &&
+		( $FN == weekly ) ]]
+	then
+	    echo "Weekly Backup Run"
+	    backup
+	fi
+	if [[ ( ${BACKUP_RETENTION_MONTHLY} -gt 0 ) && ( ! -z "${BACKUP_RETENTION_MONTHLY}" ) && ( ${BACKUP_RETENTION_MONTHLY} -ne 0 ) && ( $FN == monthly ) ]]; then
+	    echo "Monthly Backup Run"
+	    backup
+	fi
+	if [[ ( ${BACKUP_RETENTION_YEARLY} -ge 0 ) && ( ! -z "${BACKUP_RETENTION_YEARLY}" ) && ( ${FN} == yearly ) ]]; then
+	    echo "Yearly Backup Run"
+	    backup
+	fi
+
+	clearVariables
+}
+
+
+function prepareBackups
+{
+	echo "Preparing Backups"
+	echo "Checking for ${BACKUP_CONF_FILE}"
+	if [ ! -z ${BACKUP_NAME} ] || [ -z ${BACKUP_CONF_FILE} ] || [ ! -f ${BACKUP_CONF_FILE} ]; then
+		echo "Specific Backup Selected or Configuration File Not Available"
+		echo "Running with Command Line Arguments and/or Defaults"
+		selectBackup
+	else
+		echo "Parcing ${BACKUP_CONF_FILE}"
+		# Get Path to this Script Resolving any symlinks
+		# So that we can fine the ini parser
+		SOURCE="${BASH_SOURCE[0]}"
+		while [ -h "${SOURCE}" ]; do # resolve $SOURCE until the file is no longer a symlink
+			DIR="$( cd -P "$( dirname "${SOURCE}" )" >/dev/null 2>&1 && pwd )"
+			SOURCE="$(readlink "$SOURCE")"
+			[[ ${SOURCE} != /* ]] && SOURCE="${DIR}/${SOURCE}" # if $SOURCE was a relative symlink, we need to resolve it relative to the path where the symlink file was located
+		done
+		DIR="$( cd -P "$( dirname "${SOURCE}" )" >/dev/null 2>&1 && pwd )"
+		echo "Using ${DIR}/bash-ini-parser"
+		source ${DIR}/bash-ini-parser
+
+		cfg_parser "${BACKUP_CONF_FILE}"
+		#cfg_writer
+		cfg_section_Globals 2> /dev/null || true
+
+		#Set defaults from First secion which should always be "Globals"
+		if [[ ! -z ${days} ]]; then export BACKUP_DEFAULT_RETENTION_DAILY=${days}; fi
+		if [[ ! -z ${weeks} ]]; then export BACKUP_DEFAULT_RETENTION_WEEKLY=${weeks}; fi
+		if [[ ! -z ${months} ]]; then export BACKUP_DEFAULT_RETENTION_MONTHLY=${months};fi
+		if [[ ! -z ${years} ]]; then export BACKUP_DEFAULT_RETENTION_YEARLY=${years}; fi
+		if [[ ! -z ${source} ]]; then export BACKUP_DEFAULT_SOURCE_DIR=${source}; fi
+		if [[ ! -z ${destination} ]]; then export BACKUP_DEFAULT_DESTINATION_DIR=${destination}; fi
+		if [[ ! -z ${command} ]]; then export BACKUP_DEFAULT_COMMAND=${command[@]}; fi
+
+		if [[ "$(declare -p backups)" =~ "declare -a" ]]; then
+			#backups is an array
+			for name in "${backups[@]}"
+			do
+				echo "Starting Backup for ${name}"
+				export BACKUP_NAME=${name}
+				#Load variables from ini File
+				cfg_section_${name} || (( echo "Invalid Backup Name ${BACKUP_NAME} in ${BACKUP_CONF_FILE}" && continue ))
+
+			        if [[ ! -z ${days} ]]; then export BACKUP_RETENTION_DAILY=${days}; fi
+			        if [[ ! -z ${weeks} ]]; then export BACKUP_RETENTION_WEEKLY=${weeks}; fi
+			        if [[ ! -z ${months} ]]; then export BACKUP_RETENTION_MONTHLY=${BACKUP_DEFAULT_RETENTION_MONTHLY}; fi
+			        if [[ ! -z ${years} ]]; then export BACKUP_RETENTION_YEARLY=${years}; fi
+			        if [[ ! -z ${source} ]]; then export BACKUP_SOURCE_DIR=${source}; fi
+			        if [[ ! -z ${destination} ]]; then export BACKUP_DESTINATION_DIR=${destination}; fi
+			        if [[ ! -z ${command} ]]; then export BACKUP_COMMAND=${command[@]}; fi
+				selectBackup
+			done
+		else
+			echo "something went wrong with the file: ${BACKUP_CONF_FILE}"
+		fi
+	fi
+
+}
+
+function show_help {
+    echo "BackupRotation available options are"
+    echo
+    echo "-e Backup command to Execute - Should be quated and any variables should be esaped"
+    echo "-c Config File - ini format"
+    echo "-s Sorce directroy to be backed up"
+    echo "-b Destination forlder for the backups"
+    echo "-n Name of the project being backuped, if specified ini files will not be parsed"
+    echo "-d Number of Daily backups to keep, negitve numbers will disable"
+    echo "-w Number of Weekly backups to keep, negitve numbers will disable"
+    echo "-m Number of Monthly backups to keep, negitve numbers will disable"
+    echo "-y Number of Yearly backups to keep, negitve numbers will disable"
+    echo "-h show this help text"
+}
+
+
+while getopts n:c:s:b:d:w:m:y:h option
+do
+        case "${option}"
+	in
+                n) export BACKUP_NAME=${OPTARG};;
+		e) export BACKUP_DEFAULT_COMMAND=${OPTARG};;
+                c) [[ ! -z ${BACKUP_NAME} ]] && show_help && exit 1 || export BACKUP_DEFAULT_CONF_FILE=${OPTARG};;
+                s) export BACKUP_DEFAULT_SOURCE_DIR=${OPTARG};;
+                b) export BACKUP_DEFAULT_DESTINATION_DIR=${OPTARG};;
+                d) export BACKUP_DEFAULT_RETENTION_DAILY=${OPTARG};;
+                w) export BACKUP_DEFAULT_RETENTION_WEEKLY=${OPTARG};;
+                m) export BACKUP_DEFAULT_RETENTION_MONTHLY=${OPTARG};;
+                y) export BACKUP_DEFAULT_RETENTION_YEARLY=${OPTARG};;
+                h) show_help
+                   exit 0
+                   ;;
+        esac
+done
+
+#Comment this out if you don't want it to look for a configuration file unless
+# I am using a default configuration file so that if it exists you can this scrip
+#  directly from cron.daily by simply copying the file to or creating a symlink there
+if [[ -z ${BACKUP_CONF_FILE} ]]; then export BACKUP_CONF_FILE=${BACKUP_DEFAULT_CONF_FILE}; else BACKUP_DEFAULT_CONF_FILE=${BACKUP_CONF_FILE}; fi
+
+echo "${DATE}"
+prepareBackups
